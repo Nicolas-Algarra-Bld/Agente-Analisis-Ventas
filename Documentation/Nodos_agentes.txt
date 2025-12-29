@@ -1,0 +1,24 @@
+Análisis de intención: 
+Me define en el estado si el usuario quiere que se genere un resultado de grafica, tabla y/o archivo y guarda los resultados en un lista del estado llamada peticiones. En caso de que el usuario pida un archivo, este nodo debe guardar en el estado en la variable nombre_archivo el nombre del archivo dado por el usuario, y en caso de que no lo haya dado el usuario, debe generar uno en base al contexto
+
+Generador SQL:
+Lee la petición del usuario, y en base a esta genera una consulta SQL y la guarda en la variable consulta_sql, el programa solo debe permitir solicitudes de SELECT, sin poder modificar la base de datos de ninguna manera. 
+
+En caso de que la variable error_sql no este vacia, significara que se dio un error al generar la sentencia sql, en ese caso este nodo debe tener el contexto de la sentencia SQL generada anteriormente y el error generado. Y debe rehacer la consulta SQL
+
+Ejecutador SQL:
+Ejecuta la consulta SQL del nodo anterior en una base MySQL producida en local. En caso de generarse un error el nodo debe escribir el error generado en la variable error_sql e ir al nodo Generador SQL.
+
+En caso de que no hubo error, la tabla generada debe ser guardada en un df de pandas en una variable del estado llamada tabla_consulta
+
+Router:
+Este deberá llamar a los agentes necesarios definidos en la variable peticiones. En caso de que en esta lista se encuentre la palabra "grafica", se debe llamar al nodo Generador graficos, si en esta lista se encuentre la palabra "archivo", se debe llamar al nodo Generador archivos, y si en esta lista se encuentre la palabra "tabla", se debe llamar al nodo Generador tablas. En caso de estar vacia, llama al nodo Generador respuesta.
+
+Generador graficos:
+En base a la tabla del estado tabla_consulta, el nodo debe generar un grafico de barras para la tabla
+
+Generador archivos:
+Este nodo va a generar un archivo excel o .csv en base a la extension del archivo de la variable nombre_archivo y lo guardara con el nombre de esa misma variable
+
+Generador respuesta:
+Este nodo generara una respuesta para el usuario en base a la lista de peticiones, 

@@ -3,3 +3,8 @@ pandas
 matplotlib
 mysql-connector-python
 datetime
+langgraph
+langchain
+langchain-aws
+boto3
+openpyxl

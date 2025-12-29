@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 # Evita prompts interactivos
 ENV DEBIAN_FRONTEND=noninteractive
@@ -15,12 +15,17 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Instalar version mas reciente de pip y aumentar timeout
+RUN pip install --upgrade pip \
+    && pip install pyarrow>=7.0 --timeout 300 --retries 10
+
 # Instalar dependencias de Python
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código de la app
 COPY app.py .
 COPY timeline.py .
+COPY agent_graph.py .
 
 # Crear carpeta para archivos generados
 RUN mkdir -p outputs

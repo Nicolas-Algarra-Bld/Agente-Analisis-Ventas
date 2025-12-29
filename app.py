@@ -4,7 +4,7 @@ import time
 import os
 import matplotlib.pyplot as plt
 from datetime import datetime
-from timeline import log_event
+from timeline import log_event, render_timeline
 
 # ------------------------------
 # CONFIGURACIÓN INICIAL
@@ -47,53 +47,88 @@ def log_node(log_placeholder, logs, node, action, status="OK", detail=None):
 # ------------------------------
 # AGENTE (SIMULADO)
 # ------------------------------
+from agent_graph import create_graph
+
+# ------------------------------
+# AGENTE (REAL)
+# ------------------------------
 def run_agent(user_input, timeline_placeholder):
-    logs = []
-    step = 1
+    graph = create_graph()
+    
+    # Initialize state
+    initial_state = {
+        "user_input": user_input,
+        "logs": [],
+        "messages": [],
+        "peticiones": [],
+        "nombre_archivo": "",
+        "consulta_sql": "",
+        "error_sql": "",
+        "tabla_consulta": []
+    }
+    
+    # Stream the graph execution
+    # We pass the timeline_placeholder via config so nodes can log in real-time
+    config = {"configurable": {"timeline": timeline_placeholder}}
+    
+    final_state = initial_state
+    
+    for event in graph.stream(initial_state, config=config):
+        for node_name, state_update in event.items():
+            # Update local tracking of state
+            final_state.update(state_update)
+            
+            # Note: Logging is now handled inside the nodes via log_event
+            if "logs" in state_update:
+                full_logs = state_update["logs"]
+            
+            # Identify final response
+            if "messages" in state_update and state_update["messages"]:
+                 final_response = state_update["messages"][-1]
 
-    log_event(timeline_placeholder, logs, step, "Entrada",
-              "Recibir mensaje del usuario")
-    step += 1
+    # Extract results
+    df = None
+    if final_state.get("tabla_consulta"):
+        df = pd.DataFrame(final_state["tabla_consulta"])
 
-    log_event(timeline_placeholder, logs, step, "Interpretación",
-              "Analizar intención y entidades")
-    step += 1
+    table_res = df if "tabla" in final_state.get("peticiones", []) else None
+    
+    # Check for file
+    file_res = None
+    if "archivo" in final_state.get("peticiones", []) and final_state.get("nombre_archivo"):
+         file_res = final_state["nombre_archivo"]
 
-    log_event(timeline_placeholder, logs, step, "Decisión",
-              "Detectar salidas solicitadas",
-              detail="tabla + gráfico + archivo")
-    step += 1
+    # Check for graphics - we don't have a chart object, but if we had code to gen it, we'd pass it. 
+    # For now, we rely on the generic 'generador_graficos' logic. 
+    # Does app.py expect a plot figure? 
+    # "if msg.get("chart") is not None: st.pyplot(msg["chart"])"
+    # My agent doesn't produce a matplotlib figure object in the state yet.
+    # I should update 'generador_graficos' to produce one OR handle it here.
+    
+    chart_res = None
+    if "grafica" in final_state.get("peticiones", []) and df is not None:
+         fig, ax = plt.subplots()
+         # Simple bar chart based on first numerical column vs first string column?
+         # Heuristic:
+         try:
+             num_cols = df.select_dtypes(include=['number']).columns
+             cat_cols = df.select_dtypes(include=['object', 'string']).columns
+             if len(num_cols) > 0 and len(cat_cols) > 0:
+                 ax.bar(df[cat_cols[0]], df[num_cols[0]])
+                 ax.set_xlabel(cat_cols[0])
+                 ax.set_ylabel(num_cols[0])
+                 chart_res = fig
+         except:
+             pass
 
-    log_event(timeline_placeholder, logs, step, "SQL",
-              "Generar consulta SQL")
-    step += 1
-
-    log_event(timeline_placeholder, logs, step, "SQL",
-              "Ejecutar consulta en MySQL")
-    step += 1
-
-    # Simulación de resultado
-    df = pd.DataFrame({
-        "producto": ["Laptop", "Monitor", "Teclado"],
-        "total_vendido": [120, 95, 80]
-    })
-
-    log_event(timeline_placeholder, logs, step, "Visualización",
-              "Generar gráfico de barras")
-    step += 1
-
-    log_event(timeline_placeholder, logs, step, "Persistencia",
-              "Guardar resultados en CSV",
-              detail="outputs/ventas_top.csv")
-    step += 1
-
-    log_event(timeline_placeholder, logs, step, "Final",
-              "Respuesta lista para el usuario")
+    text_res = final_response if final_response else "Proceso completado."
 
     return {
-        "text": "Aquí tienes el resultado solicitado.",
-        "table": df,
-        "logs": logs
+        "text": text_res,
+        "table": table_res,
+        "chart": chart_res,
+        "file": file_res, 
+        "logs": full_logs
     }
 
 
