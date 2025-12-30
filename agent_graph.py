@@ -11,7 +11,13 @@ import json
 from timeline import log_event
 import socket
 import threading
+import threading
+import uuid
+import matplotlib.pyplot as plt
 from streamlit.runtime.scriptrunner import add_script_run_ctx
+
+# Set matplotlib backend to Agg to avoid GUI issues
+plt.switch_backend('Agg')
 
 # Helper for Context
 def ensure_streamlit_context(config):
@@ -28,6 +34,7 @@ class AgentState(TypedDict):
     error_sql: str
     tabla_consulta: dict  # Check serialization, or store as json-compatible dict
     logs: Annotated[List[dict], operator.add]
+    grafica_path: str
     user_input: str
 
 # Helper for Database Connection
@@ -196,10 +203,59 @@ def generador_graficos(state: AgentState, config: RunnableConfig):
     start_len = len(logs)
     step = len(render_logs) + 1
     
+    data = state.get("tabla_consulta", [])
+    grafica_path = ""
+    status = "OK"
+    detail = None
+    
+    if data:
+        try:
+            df = pd.DataFrame(data)
+            
+            # Convert columns to numeric if possible
+            for col in df.columns:
+                try:
+                    df[col] = pd.to_numeric(df[col])
+                except Exception:
+                    pass # Keep as is if conversion fails
+            
+            # Basic Heuristic: Plot first numerical col vs first string col
+            num_cols = df.select_dtypes(include=['number']).columns
+            cat_cols = df.select_dtypes(include=['object', 'string']).columns
+            
+            if len(num_cols) > 0 and len(cat_cols) > 0:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.bar(df[cat_cols[0]], df[num_cols[0]], color='skyblue')
+                ax.set_xlabel(cat_cols[0])
+                ax.set_ylabel(num_cols[0])
+                ax.set_title(f"Gráfico de {num_cols[0]} por {cat_cols[0]}")
+                plt.xticks(rotation=45, ha='right')
+                plt.tight_layout()
+                
+                # Save
+                chart_filename = f"chart_{uuid.uuid4().hex}.png"
+                output_dir = os.path.join(os.getcwd(), "outputs")
+                os.makedirs(output_dir, exist_ok=True)
+                grafica_path = os.path.join(output_dir, chart_filename)
+                
+                plt.savefig(grafica_path)
+                plt.close(fig)
+                detail = f"Gráfico guardado en {grafica_path}"
+            else:
+                status = "WARNING"
+                detail = "No se encontraron columnas adecuadas para graficar"
+        except Exception as e:
+            status = "ERROR"
+            detail = f"Error generando gráfico: {str(e)}"
+    else:
+        status = "WARNING"
+        detail = "No hay datos para graficar"
+
     if timeline:
-        log_event(timeline, render_logs, step, "Generador Gráficos", "Preparado gráfico", status="OK")
+        log_event(timeline, render_logs, step, "Generador Gráficos", "Generando gráfico", status=status, detail=detail)
         
     return {
+        "grafica_path": grafica_path,
         "logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []
     }
 
@@ -260,8 +316,9 @@ def generador_respuesta(state: AgentState, config: RunnableConfig):
     data = state.get("tabla_consulta", [])
     
     prompt = f"""
-    Genera una respuesta natural y breve para el usuario basada en su petición: "{state['user_input']}"
+    Genera una respuesta natural y breve que describa los datos obtenidos  en base a la petición del usuario: "{state['user_input']}"
     y el hecho de que se han generado los resultados solicitados ({', '.join(state['peticiones'])}).
+    Si el usuario te solicita crear una tabla, archivo o grafico, ignoralo y responde únicamente con la respuesta natural y breve.
     
     Resumen de datos obtenidos: {str(data)}
     """

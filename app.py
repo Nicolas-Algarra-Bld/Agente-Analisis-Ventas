@@ -91,7 +91,10 @@ def run_agent(user_input, timeline_placeholder):
     if final_state.get("tabla_consulta"):
         df = pd.DataFrame(final_state["tabla_consulta"])
 
-    table_res = df if "tabla" in final_state.get("peticiones", []) else None
+    table_res = None
+    if "tabla" in final_state.get("peticiones", []) and df is not None:
+         if not df.empty:
+             table_res = df
     
     # Check for file
     file_res = None
@@ -106,20 +109,8 @@ def run_agent(user_input, timeline_placeholder):
     # I should update 'generador_graficos' to produce one OR handle it here.
     
     chart_res = None
-    if "grafica" in final_state.get("peticiones", []) and df is not None:
-         fig, ax = plt.subplots()
-         # Simple bar chart based on first numerical column vs first string column?
-         # Heuristic:
-         try:
-             num_cols = df.select_dtypes(include=['number']).columns
-             cat_cols = df.select_dtypes(include=['object', 'string']).columns
-             if len(num_cols) > 0 and len(cat_cols) > 0:
-                 ax.bar(df[cat_cols[0]], df[num_cols[0]])
-                 ax.set_xlabel(cat_cols[0])
-                 ax.set_ylabel(num_cols[0])
-                 chart_res = fig
-         except:
-             pass
+    if "grafica" in final_state.get("peticiones", []) and final_state.get("grafica_path"):
+         chart_res = final_state["grafica_path"]
 
     text_res = final_response if final_response else "Proceso completado."
 
@@ -139,11 +130,14 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-        if msg.get("table") is not None:
+        if msg.get("table") is not None and not msg["table"].empty:
             st.dataframe(msg["table"])
 
         if msg.get("chart") is not None:
-            st.pyplot(msg["chart"])
+            if os.path.exists(msg["chart"]):
+                st.image(msg["chart"])
+            else:
+                st.error("Error: Image file not found.")
 
         if msg.get("file") is not None:
             st.success(f"Archivo generado: `{msg['file']}`")
@@ -182,7 +176,14 @@ if user_input:
             response = run_agent(user_input, timeline_placeholder)
 
         st.markdown(response["text"])
-        st.dataframe(response["table"])
+        if response["table"] is not None and not response["table"].empty:
+            st.dataframe(response["table"])
+        
+        if response["chart"]:
+            if os.path.exists(response["chart"]):
+                st.image(response["chart"])
+            else:
+                st.error("Error: Image file not found.")
 
 
     # Guardar respuesta del agente
@@ -190,5 +191,6 @@ if user_input:
         "role": "assistant",
         "content": response["text"],
         "table": response["table"],
+        "chart": response["chart"],
         "logs": response["logs"]
     })

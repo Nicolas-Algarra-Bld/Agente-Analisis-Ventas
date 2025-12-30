@@ -6,13 +6,20 @@ mock_mysql = MagicMock()
 sys.modules["mysql"] = mock_mysql
 sys.modules["mysql.connector"] = mock_mysql
 
-# Mock pandas
+# Restore Pandas Mock since it is not installed in this environment
 mock_pandas = MagicMock()
 sys.modules["pandas"] = mock_pandas
 
-# Mock langchain and others if needed, but let's see.
-# agent_graph imports langchain_aws, langgraph, etc.
-# If those are missing, I'll mock them too.
+# Mock matplotlib
+mock_matplotlib = MagicMock()
+mock_pyplot = MagicMock()
+mock_matplotlib.pyplot = mock_pyplot
+sys.modules["matplotlib"] = mock_matplotlib
+sys.modules["matplotlib.pyplot"] = mock_pyplot
+
+# ... (rest of imports) ...
+
+
 
 import unittest
 from unittest.mock import patch
@@ -129,6 +136,32 @@ class TestAgentGraph(unittest.TestCase):
         logs.extend(res2["logs"])
         
         self.assertEqual(len(logs), 2) # Should have 2 log entries now
+        
+        # Test 5: Graph Generation with String Numbers
+        state["tabla_consulta"] = [{"producto": "A", "ventas": "100"}, {"producto": "B", "ventas": "200"}]
+        # Mock matplotlib savefig to just do nothing or verify call
+        mock_pyplot.savefig.return_value = None
+        
+        # Configure pd mock to simulate finding numeric columns
+        mock_df = MagicMock()
+        mock_pandas.DataFrame.return_value = mock_df
+        
+        def side_effect_select_dtypes(*args, **kwargs):
+            include = kwargs.get("include")
+            m = MagicMock()
+            if include == ['number']:
+                m.columns = ['ventas']
+            elif include == ['object', 'string']:
+                m.columns = ['producto']
+            else:
+                m.columns = []
+            return m
+            
+        mock_df.select_dtypes.side_effect = side_effect_select_dtypes
+        
+        res_graph = agent_graph.generador_graficos(state, config)
+        self.assertTrue(res_graph["grafica_path"].endswith(".png"))
+        self.assertIn("outputs", res_graph["grafica_path"])
         
         print("Unit tests of nodes passed.")
 
