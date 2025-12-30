@@ -45,13 +45,10 @@ def log_node(log_placeholder, logs, node, action, status="OK", detail=None):
     time.sleep(0.4)
 
 # ------------------------------
-# AGENTE (SIMULADO)
+# AGENTE
 # ------------------------------
 from agent_graph import create_graph
-
-# ------------------------------
-# AGENTE (REAL)
-# ------------------------------
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 def run_agent(user_input, timeline_placeholder):
     graph = create_graph()
     
@@ -69,9 +66,12 @@ def run_agent(user_input, timeline_placeholder):
     
     # Stream the graph execution
     # We pass the timeline_placeholder via config so nodes can log in real-time
-    config = {"configurable": {"timeline": timeline_placeholder}}
+    ctx = get_script_run_ctx()
+    config = {"configurable": {"timeline": timeline_placeholder, "streamlit_ctx": ctx}}
     
     final_state = initial_state
+    
+    full_logs = []
     
     for event in graph.stream(initial_state, config=config):
         for node_name, state_update in event.items():
@@ -80,7 +80,7 @@ def run_agent(user_input, timeline_placeholder):
             
             # Note: Logging is now handled inside the nodes via log_event
             if "logs" in state_update:
-                full_logs = state_update["logs"]
+                full_logs.extend(state_update["logs"])
             
             # Identify final response
             if "messages" in state_update and state_update["messages"]:

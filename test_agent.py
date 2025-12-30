@@ -40,6 +40,10 @@ sys.modules["langchain_core.runnables"] = MagicMock()
 sys.modules["langgraph"] = MagicMock()
 sys.modules["langgraph.graph"] = MagicMock()
 sys.modules["timeline"] = MagicMock()
+sys.modules["streamlit"] = MagicMock()
+sys.modules["streamlit.runtime"] = MagicMock()
+sys.modules["streamlit.runtime.scriptrunner"] = MagicMock()
+
 
 # Now define what agent_graph needs from those mocks that are used at MODULE LEVEL
 # agent_graph.py: "from langgraph.graph import StateGraph, END"
@@ -57,6 +61,12 @@ class TestAgentGraph(unittest.TestCase):
     @patch('agent_graph.get_llm')
     @patch('agent_graph.get_db_connection')
     def test_graph_flow(self, mock_db_conn, mock_get_llm):
+        # Setup log_event side effect to simulate appending
+        def mock_log_append(timeline, logs, *args, **kwargs):
+            logs.append({"step": "mock"})
+            
+        agent_graph.log_event.side_effect = mock_log_append
+
         # Since we mocked the whole graph engine, create_graph returns a Mock.
         # So we can't test actual flow execution nicely unless we partially mock or use real langgraph.
         # Assuming langgraph MIGHT be present but pandas/mysql are implementation details.
@@ -76,7 +86,7 @@ class TestAgentGraph(unittest.TestCase):
             "error_sql": "",
             "tabla_consulta": []
         }
-        config = {"configurable": {"timeline": None}}
+        config = {"configurable": {"timeline": MagicMock()}}
         
         # Test 1: Analisis Intencion
         # Mock LLM inside node
@@ -102,6 +112,23 @@ class TestAgentGraph(unittest.TestCase):
         
         res_exec = agent_graph.ejecutador_sql(state, config)
         self.assertEqual(res_exec["tabla_consulta"], [{"col1": 10}])
+        
+        # Test 4: Log Accumulation (Use the new returns)
+        logs = []
+        state["logs"] = logs
+        render_logs = list(logs)
+        start_len = len(logs)
+        
+        # Simulate node 1
+        res1 = agent_graph.analisis_intencion(state, config)
+        logs.extend(res1["logs"])
+        
+        # Simulate node 2
+        state["logs"] = logs # Update state for next node
+        res2 = agent_graph.generador_sql(state, config)
+        logs.extend(res2["logs"])
+        
+        self.assertEqual(len(logs), 2) # Should have 2 log entries now
         
         print("Unit tests of nodes passed.")
 

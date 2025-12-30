@@ -10,6 +10,14 @@ from langgraph.graph import StateGraph, END
 import json
 from timeline import log_event
 import socket
+import threading
+from streamlit.runtime.scriptrunner import add_script_run_ctx
+
+# Helper for Context
+def ensure_streamlit_context(config):
+    ctx = config.get("configurable", {}).get("streamlit_ctx")
+    if ctx:
+        add_script_run_ctx(threading.current_thread(), ctx)
 
 # Define the State
 class AgentState(TypedDict):
@@ -19,7 +27,7 @@ class AgentState(TypedDict):
     consulta_sql: str
     error_sql: str
     tabla_consulta: dict  # Check serialization, or store as json-compatible dict
-    logs: List[dict]
+    logs: Annotated[List[dict], operator.add]
     user_input: str
 
 # Helper for Database Connection
@@ -60,10 +68,13 @@ def get_llm():
 # --- Nodes ---
 
 def analisis_intencion(state: AgentState, config: RunnableConfig):
+    ensure_streamlit_context(config)
     # Este nodo analisa que resultados desea obtener el usuario
     timeline = config.get("configurable", {}).get("timeline")
     logs = state.get("logs", [])
-    step = len(logs) + 1
+    render_logs = list(logs)
+    start_len = len(logs)
+    step = len(render_logs) + 1
     
     # Pre-log or Post-log? User wants to see it "al pasar por cada nodo".
     # I'll log successful execution at the end of the node as done before, 
@@ -74,7 +85,7 @@ def analisis_intencion(state: AgentState, config: RunnableConfig):
     
     Identifica:
     1. Si el usuario quiere una "grafica", "tabla" y/o "archivo".
-    2. Si quiere un archivo, extrae el nombre deseado. Si no lo especifica, genera uno descriptivo (ej. reporte_ventas.csv).
+    2. Si quiere un archivo, extrae el nombre deseado. Si no lo especifica, genera uno descriptivo (ej. reporte_ventas.csv). Este archivo sera UNICAMENTE un archivo .csv o .xlsx.
     
     Responde ÚNICAMENTE con un JSON con este formato:
     {{
@@ -95,18 +106,21 @@ def analisis_intencion(state: AgentState, config: RunnableConfig):
         status = "WARNING"
         
     if timeline:
-        log_event(timeline, logs, step, "Análisis de intención", "Analizado petición", status=status)
+        log_event(timeline, render_logs, step, "Análisis de intención", f"Se identificaron la(s) petición(es): {data.get('peticiones', [])}", status=status)
         
     return {
         "peticiones": data.get("peticiones", []),
         "nombre_archivo": data.get("nombre_archivo", ""),
-        "logs": logs
+        "logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []
     }
 
 def generador_sql(state: AgentState, config: RunnableConfig):
+    ensure_streamlit_context(config)
     timeline = config.get("configurable", {}).get("timeline")
     logs = state.get("logs", [])
-    step = len(logs) + 1
+    render_logs = list(logs)
+    start_len = len(logs)
+    step = len(render_logs) + 1
     
     llm = get_llm()
     schema = get_db_schema()
@@ -115,31 +129,36 @@ def generador_sql(state: AgentState, config: RunnableConfig):
         context_error = f"La consulta anterior falló con: {state['error_sql']}. Corrige el error."
 
     prompt = f"""
-    Eres un experto en SQL. Genera UNA sola consulta SQL SELECT para MySQL basada en:
+    Eres un experto en SQL. Genera UNA sola consulta SQL SOLAMENTE SELECT para MySQL basada en:
     Solicitud: "{state['user_input']}"
     Schema:
     {schema}
     
     {context_error}
     
-    Responde ÚNICAMENTE con la consulta SQL pura, sin markdown, sin explicaciones.
+    Responde ÚNICAMENTE con la consulta SQL SELECT pura, sin markdown, sin explicaciones, 
+    y en caso de que el usuario solicite guardar en algun archivo información IGNORALO y 
+    solo genera la consulta que da la información deseada por el usuario, NO intentes guardar ni crear archivos.
     """
     response = llm.invoke([HumanMessage(content=prompt)])
     sql = response.content.strip().replace("```sql", "").replace("```", "").strip()
     
     if timeline:
-        log_event(timeline, logs, step, "Generador SQL", "Generado SQL", status="OK")
+        log_event(timeline, render_logs, step, "Generador SQL", f"Consulta SQL generada: {sql}", status="OK")
     
     return {
         "consulta_sql": sql,
         "error_sql": "",
-        "logs": logs
+        "logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []
     }
 
 def ejecutador_sql(state: AgentState, config: RunnableConfig):
+    ensure_streamlit_context(config)
     timeline = config.get("configurable", {}).get("timeline")
     logs = state.get("logs", [])
-    step = len(logs) + 1
+    render_logs = list(logs)
+    start_len = len(logs)
+    step = len(render_logs) + 1
     
     sql = state["consulta_sql"]
     try:
@@ -154,76 +173,88 @@ def ejecutador_sql(state: AgentState, config: RunnableConfig):
         conn.close()
         
         if timeline:
-            log_event(timeline, logs, step, "Ejecutador SQL", f"Ejecutado consulta SQL: {sql}", status="OK")
+            log_event(timeline, render_logs, step, "Ejecutador SQL", "Consulta SQL ejecutada", status="OK")
 
         return {
             "tabla_consulta": df_data,
-            "logs": logs
+            "logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []
         }
     except Exception as e:
         if timeline:
-            log_event(timeline, logs, step, "Ejecutador SQL", f"Error ejecutando consulta SQL: {sql}", status="ERROR", detail=str(e))
+            log_event(timeline, render_logs, step, "Ejecutador SQL", "Error ejecutando consulta SQL", status="ERROR", detail=str(e))
             
         return {
             "error_sql": str(e),
-            "logs": logs
+            "logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []
         }
 
 def generador_graficos(state: AgentState, config: RunnableConfig):
+    ensure_streamlit_context(config)
     timeline = config.get("configurable", {}).get("timeline")
     logs = state.get("logs", [])
-    step = len(logs) + 1
+    render_logs = list(logs)
+    start_len = len(logs)
+    step = len(render_logs) + 1
     
     if timeline:
-        log_event(timeline, logs, step, "Generador Gráficos", "Preparado gráfico", status="OK")
+        log_event(timeline, render_logs, step, "Generador Gráficos", "Preparado gráfico", status="OK")
         
     return {
-        "logs": logs
+        "logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []
     }
 
 def generador_archivos(state: AgentState, config: RunnableConfig):
+    ensure_streamlit_context(config)
     timeline = config.get("configurable", {}).get("timeline")
     logs = state.get("logs", [])
-    step = len(logs) + 1
+    render_logs = list(logs)
+    start_len = len(logs)
+    step = len(render_logs) + 1
     
     filename = state.get("nombre_archivo", "output.csv")
     data = state.get("tabla_consulta", [])
     
     if not data:
         if timeline:
-            log_event(timeline, logs, step, "Generador Archivos", "No hay datos", status="WARNING")
-        return {"logs": logs}
+            log_event(timeline, render_logs, step, "Generador Archivos", "No hay datos en la consulta", status="WARNING")
+        return {"logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []}
     
     df = pd.DataFrame(data)
-    output_path = os.path.join(os.getcwd(), filename)
+    output_path = os.path.join(os.getcwd(), f"outputs/{filename}")
     if filename.endswith(".xlsx"):
         df.to_excel(output_path, index=False)
     else:
         df.to_csv(output_path, index=False)
         
     if timeline:
-        log_event(timeline, logs, step, "Generador Archivos", f"Archivo guardado: {filename}", status="OK", detail=filename)
+        log_event(timeline, render_logs, step, "Generador Archivos", f"Archivo guardado: {output_path}", status="OK", detail=filename)
         
     return {
-        "logs": logs
+        "logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []
     }
 
 def generador_tablas(state: AgentState, config: RunnableConfig):
+    ensure_streamlit_context(config)
     timeline = config.get("configurable", {}).get("timeline")
     logs = state.get("logs", [])
-    step = len(logs) + 1
+    render_logs = list(logs)
+    start_len = len(logs)
+    step = len(render_logs) + 1
     
     if timeline:
-        log_event(timeline, logs, step, "Generador Tablas", "Preparada tabla", status="OK")
+        log_event(timeline, render_logs, step, "Generador Tablas", "Preparada tabla", status="OK")
         
     return {
-        "logs": logs
+        "logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []
     }
 
 def generador_respuesta(state: AgentState, config: RunnableConfig):
+    ensure_streamlit_context(config)
     timeline = config.get("configurable", {}).get("timeline")
     logs = state.get("logs", [])
-    step = len(logs) + 1
+    render_logs = list(logs)
+    start_len = len(logs)
+    step = len(render_logs) + 1
     
     llm = get_llm()
     data = state.get("tabla_consulta", [])
@@ -232,16 +263,16 @@ def generador_respuesta(state: AgentState, config: RunnableConfig):
     Genera una respuesta natural y breve para el usuario basada en su petición: "{state['user_input']}"
     y el hecho de que se han generado los resultados solicitados ({', '.join(state['peticiones'])}).
     
-    Resumen de datos obtenidos (primeras 3 filas): {str(data[:3])}
+    Resumen de datos obtenidos: {str(data)}
     """
     response = llm.invoke([HumanMessage(content=prompt)])
     
     if timeline:
-        log_event(timeline, logs, step, "Generador Respuesta", "Respuesta final", status="OK")
+        log_event(timeline, render_logs, step, "Generador Respuesta", "Respuesta final", status="OK")
     
     return {
         "messages": [response.content],
-        "logs": logs
+        "logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []
     }
 
 # Connection Router
@@ -266,14 +297,17 @@ def router_split(state: AgentState):
     return routes
 
 def router_node(state: AgentState, config: RunnableConfig):
+    ensure_streamlit_context(config)
     timeline = config.get("configurable", {}).get("timeline")
     logs = state.get("logs", [])
-    step = len(logs) + 1
+    render_logs = list(logs)
+    start_len = len(logs)
+    step = len(render_logs) + 1
     
     if timeline:
-        log_event(timeline, logs, step, "Router", "Distribuyendo tareas", status="OK")
+        log_event(timeline, render_logs, step, "Router", "Distribuyendo tareas", status="OK")
         
-    return {"logs": logs}
+    return {"logs": [render_logs[-1]] if timeline and len(render_logs) > start_len else []}
 
     
 # --- Graph Construction ---
